@@ -1,6 +1,7 @@
-package com.github._5si.dancoremods.waterfov;
+package com.github._5si.dancoremods.water;
 
 import dev.boredhuman.api.DanCoreAPI;
+import dev.boredhuman.api.config.CategoryStart;
 import dev.boredhuman.api.config.ConfigMinMax;
 import dev.boredhuman.api.config.ConfigProperty;
 import dev.boredhuman.api.events.BatchedLineRenderingEvent;
@@ -9,6 +10,10 @@ import dev.boredhuman.api.module.AbstractModule;
 import dev.boredhuman.api.module.ModColor;
 import dev.boredhuman.api.module.Module;
 import dev.boredhuman.api.util.MutableValue;
+import dev.boredhuman.gui.elements.BasicElement;
+import dev.boredhuman.gui.listeners.ClickListener;
+import dev.boredhuman.tweaker.BasicHook;
+import dev.boredhuman.tweaker.ReturnStrategy;
 import dev.boredhuman.util.Pair;
 import dev.boredhuman.util.Position;
 import io.netty.util.internal.ConcurrentSet;
@@ -21,6 +26,9 @@ import net.minecraft.client.renderer.ActiveRenderInfo;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.util.BlockPos;
 import net.minecraft.util.EnumFacing;
+import net.minecraft.util.MathHelper;
+import net.minecraft.world.IBlockAccess;
+import net.minecraft.world.chunk.Chunk;
 import net.minecraftforge.client.event.EntityViewRenderEvent;
 import net.minecraftforge.client.event.RenderBlockOverlayEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -30,11 +38,9 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.List;
 
-//@Mod(modid = "watermod")
+@Mod(modid = "watermod")
 @Module(name = "Water", author = {"5si"}, description = "Cool settings for rendering water in minecraft!")
 public class Main extends AbstractModule {
 
@@ -43,14 +49,38 @@ public class Main extends AbstractModule {
     @ConfigProperty(name = "Stop FOV Change In Water")
     MutableValue<Boolean> waterFOV = new MutableValue<>(true);
 
-    @ConfigProperty(name = "Disable Water Fog")
+    @ConfigProperty(name = "Disable Fog")
     MutableValue<Boolean> waterFog = new MutableValue<>(true);
 
     @ConfigProperty(name = "Disable Water Overlay")
     MutableValue<Boolean> waterOverlay = new MutableValue<>(true);
 
-    @ConfigProperty(name = "Dispenser Water Checker")
+    @ConfigProperty(name = "Custom Water Tint")
+    MutableValue<Boolean> doWaterTint = new MutableValue<>(false);
+
+    @ConfigProperty(name = "Custom Lava Tint")
+    MutableValue<Boolean> doLavaTint = new MutableValue<>(false);
+
+    @ConfigProperty(name = "Water Tint")
+    ModColor waterTint = new ModColor(16777215);
+
+    @ConfigProperty(name = "Lava Tint")
+    ModColor lavaTint = new ModColor(16777215);
+
+    @ConfigProperty(name = "Apply Colors")
+    ClickListener clickListener = this::applyColors;
+
+    @CategoryStart(name = "Dispenser Water checker")
+    @ConfigProperty(name = "Enabled")
     MutableValue<Boolean> waterHelper = new MutableValue<>(false);
+
+    @ConfigProperty(name = "Radius")
+    @ConfigMinMax(min = 1, max = 100)
+    MutableValue<Integer> waterRadius = new MutableValue<>(48);
+
+    @ConfigProperty(name = "Ticks Delay Between Checks")
+    @ConfigMinMax(min = 1, max = 100)
+    MutableValue<Integer> waterCheckTime = new MutableValue<>(32);
 
     @ConfigProperty(name = "Do Depth")
     MutableValue<Boolean> doDepth = new MutableValue<>(true);
@@ -62,10 +92,27 @@ public class Main extends AbstractModule {
     @ConfigMinMax(min = 1, max = 4)
     MutableValue<Float> lineWidth = new MutableValue<>(4.0F);
 
-//    @Mod.EventHandler
-//    public void postInit(FMLPostInitializationEvent e) {
-//        init();
-//    }
+    @Mod.EventHandler
+    public void postInit(FMLPostInitializationEvent e) {
+        init();
+    }
+
+    public Main() {
+        BasicHook.addFunction(array -> {
+            if (!this.isEnabled().getValue() || (!this.doWaterTint.getValue() && !this.doLavaTint.getValue())) {
+                return new ReturnStrategy();
+            }
+            IBlockAccess worldIn = (IBlockAccess) array[1];
+            BlockPos pos = (BlockPos) array[2];
+            Material material = worldIn.getBlockState(pos).getBlock().getMaterial();
+            if (material == Material.water && doWaterTint.getValue()) {
+                return new ReturnStrategy(waterTint.getIntColor());
+            } else if (material == Material.lava && doLavaTint.getValue()) {
+                return new ReturnStrategy(lavaTint.getIntColor());
+            }
+            return new ReturnStrategy();
+        }, WaterColorPatch.WATER_PATCH);
+    }
 
     @Override
     public void init() {
@@ -100,59 +147,65 @@ public class Main extends AbstractModule {
         }
     }
 
-    private long tick = 0;
-    Set<BlockPos> positions = new ConcurrentSet<>();
-    int radius = 50;
-
-    ExecutorService executorService;
+    private long tick = -1;
+    final Set<BlockPos> positions = new ConcurrentSet<>();
+    int delay = 20; //
 
     @SubscribeEvent
     public void tick(TickEvent.ClientTickEvent e) {
-        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue()) {
-            if (!positions.isEmpty()) positions.clear();
+        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue() || e.phase != TickEvent.Phase.END) {
             return;
         }
-        if (e.phase != TickEvent.Phase.END) return;
-        if (++tick % 20 == 0) {
-            positions.clear();
-            executorService = Executors.newFixedThreadPool(4);
-            int startY = Math.max((int) (mc.thePlayer.posY - radius), 0);
-            if (startY > 255) return;
-            int height = (int) Math.min(mc.thePlayer.posY + radius, 255);
-            if (height < 0) return;
-            for (int loopX = (int) mc.thePlayer.posX - radius; loopX <= mc.thePlayer.posX + radius; ++loopX) {
-                final int x = loopX;
-                for (int loopZ = (int) mc.thePlayer.posZ - radius; loopZ <= mc.thePlayer.posZ + radius; ++loopZ) {
-                    final int z = loopZ;
-                    executorService.submit(() -> {
+        if (++tick % delay != 0)
+            return; // im actually a reject and forgot the "++" in "++tick" and didnt see it until 2 hours after debugging holy shit
+        delay = waterCheckTime.getValue();
+        positions.clear();
+        int radius = waterRadius.getValue();
+        int i = MathHelper.floor_double(mc.thePlayer.posX - radius);
+        int j = MathHelper.floor_double(mc.thePlayer.posX + radius + 1.0D);
+        int k = MathHelper.floor_double(mc.thePlayer.posY - radius);
+        int l = MathHelper.floor_double(mc.thePlayer.posY + radius + 1.0D);
+        int i1 = MathHelper.floor_double(mc.thePlayer.posZ - radius);
+        int j1 = MathHelper.floor_double(mc.thePlayer.posZ + radius + 1.0D);
+        int ystart = ((k - 1) < 0) ? 0 : (k - 1);
+
+        for (int chunkx = (i >> 4); chunkx <= ((j - 1) >> 4); chunkx++) { // poggers spigot code
+            int cx = chunkx << 4;
+            for (int chunkz = (i1 >> 4); chunkz <= ((j1 - 1) >> 4); chunkz++) {
+                int finalChunkz = chunkz;
+                int finalChunkx = chunkx;
+                Chunk chunk = mc.theWorld.getChunkFromChunkCoords(finalChunkx, finalChunkz);
+                int cz = finalChunkz << 4;
+
+                int xstart = (i < cx) ? cx : i;
+                int xend = (j < (cx + 16)) ? j : (cx + 16);
+                int zstart = (i1 < cz) ? cz : i1;
+                int zend = (j1 < (cz + 16)) ? j1 : (cz + 16);
+                for (int x = xstart; x < xend; x++) {
+                    for (int z = zstart; z < zend; z++) {
                         BlockPos.MutableBlockPos mbp = new BlockPos.MutableBlockPos();
                         Map<EnumFacing, BlockPos> posToAdd = new HashMap<>();
-                        for (int y = startY; y <= height; ++y) {
+                        for (int y = ystart; y < l; y++) {
                             mbp.set(x, y, z);
-                            IBlockState blockState = mc.theWorld.getBlockState(mbp);
+                            IBlockState blockState = chunk.getBlockState(mbp);
                             if (!(blockState.getBlock() instanceof BlockDispenser)) {
                                 continue;
                             }
                             EnumFacing facing = blockState.getValue(BlockDispenser.FACING);
-                            BlockPos faceblock = mbp.offset(facing);
-                            int id = Block.getIdFromBlock(mc.theWorld.getBlockState(faceblock).getBlock());
-                            if (id == 8 || id == 9) continue;
-                            if (facing == EnumFacing.DOWN || facing == EnumFacing.UP) {
-                                this.positions.add(faceblock);
+                            BlockPos faceBlock = mbp.offset(facing);
+                            int id = Block.getIdFromBlock(chunk.getBlockState(faceBlock).getBlock());
+                            if (id == 8 || id == 9) {
                                 continue;
                             }
-                            posToAdd.put(facing, faceblock);
+                            if (facing == EnumFacing.DOWN || facing == EnumFacing.UP) {
+                                this.positions.add(faceBlock);
+                                continue;
+                            }
+                            posToAdd.put(facing, faceBlock);
                         }
                         this.positions.addAll(posToAdd.values());
-                    });
+                    }
                 }
-            }
-            executorService.shutdown();
-            try {
-                executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
-            } catch (Throwable err) {
-                err.printStackTrace();
-                executorService.shutdownNow();
             }
         }
     }
@@ -205,5 +258,9 @@ public class Main extends AbstractModule {
         return linesList;
     }
 
+    public boolean applyColors(BasicElement<?> basicElement) {
+        Minecraft.getMinecraft().renderGlobal.loadRenderers();
+        return true;
+    }
 
 }

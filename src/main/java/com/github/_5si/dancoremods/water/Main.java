@@ -36,11 +36,12 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
+import org.apache.logging.log4j.LogManager;
 
 import java.util.*;
 import java.util.List;
 
-@Mod(modid = "watermod")
+//@Mod(modid = "watermod")
 @Module(name = "Water", author = {"5si"}, description = "Cool settings for rendering water in minecraft!")
 public class Main extends AbstractModule {
 
@@ -58,11 +59,11 @@ public class Main extends AbstractModule {
     @ConfigProperty(name = "Custom Water Tint")
     MutableValue<Boolean> doWaterTint = new MutableValue<>(false);
 
-    @ConfigProperty(name = "Custom Lava Tint")
-    MutableValue<Boolean> doLavaTint = new MutableValue<>(false);
-
     @ConfigProperty(name = "Water Tint")
     ModColor waterTint = new ModColor(16777215);
+
+    @ConfigProperty(name = "Custom Lava Tint")
+    MutableValue<Boolean> doLavaTint = new MutableValue<>(false);
 
     @ConfigProperty(name = "Lava Tint")
     ModColor lavaTint = new ModColor(16777215);
@@ -92,10 +93,12 @@ public class Main extends AbstractModule {
     @ConfigMinMax(min = 1, max = 4)
     MutableValue<Float> lineWidth = new MutableValue<>(4.0F);
 
-    @Mod.EventHandler
+    //    @Mod.EventHandler
     public void postInit(FMLPostInitializationEvent e) {
         init();
     }
+
+    private boolean onOptifine;
 
     public Main() {
         BasicHook.addFunction(array -> {
@@ -112,6 +115,33 @@ public class Main extends AbstractModule {
             }
             return new ReturnStrategy();
         }, WaterColorPatch.WATER_PATCH);
+        try {
+            Class<?> klass = Class.forName("net.optifine.Log");
+            onOptifine = true;
+        } catch (Throwable ignored) {
+            onOptifine = false;
+        }
+        if (onOptifine) {
+
+            BasicHook.addFunction(array -> {
+                if (!this.isEnabled().getValue() || (!this.doWaterTint.getValue() && !this.doLavaTint.getValue())) {
+                    return new ReturnStrategy();
+                }
+                IBlockState blockState = (IBlockState) array[1];
+                System.out.println(blockState.getBlock().getUnlocalizedName());
+                Material material = blockState.getBlock().getMaterial();
+                if (material == Material.water) {
+                    if (this.doWaterTint.getValue()) {
+                        return new ReturnStrategy(this.waterTint.getIntColor());
+                    } else return new ReturnStrategy();
+                } else if (material == Material.lava) {
+                    if (this.doLavaTint.getValue()) {
+                        return new ReturnStrategy(this.lavaTint.getIntColor());
+                    } else return new ReturnStrategy();
+                }
+                return new ReturnStrategy();
+            }, WaterColorOptifinePatch.WATER_PATCH_OPTIFINE);
+        }
     }
 
     @Override
@@ -153,11 +183,14 @@ public class Main extends AbstractModule {
 
     @SubscribeEvent
     public void tick(TickEvent.ClientTickEvent e) {
-        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue() || e.phase != TickEvent.Phase.END) {
+        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue()) {
+            positions.clear();
             return;
         }
-        if (++tick % delay != 0)
-            return; // im actually a reject and forgot the "++" in "++tick" and didnt see it until 2 hours after debugging holy shit
+        if (e.phase == TickEvent.Phase.END) {
+            return;
+        }
+        if (++tick % delay != 0) return; // im actually a reject and forgot the "++" in "++tick" and didnt see it until 2 hours after debugging holy shit
         delay = waterCheckTime.getValue();
         positions.clear();
         int radius = waterRadius.getValue();

@@ -93,6 +93,6 @@ jar {
             "Author" : "5si",
             "Description" : "Cool settings for rendering water in minecraft!",
             "Image" : "",
-            "Version" : "1.0"
+            "Version" : "1.1"
     )
 }

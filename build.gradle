@@ -91,8 +91,8 @@ jar {
     manifest.attributes(
             "ModuleName" : "Water Tools Mod",
             "Author" : "5si",
-            "Description" : "",
+            "Description" : "Cool settings for rendering water in minecraft!",
             "Image" : "",
-            "Version" : "1.03"
+            "Version" : "1.0"
     )
 }

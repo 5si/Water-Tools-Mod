@@ -32,7 +32,7 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 import java.util.*;
 
 //@Mod(modid = "watermod")
-@Module(name = "Water", author = {"5si"}, description = "Fix your FOV being changed when in water!")
+@Module(name = "Water", author = {"5si"}, description = "Cool settings for rendering water in minecraft!")
 public class Main extends AbstractModule {
 
     final Minecraft mc = Minecraft.getMinecraft();

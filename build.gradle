@@ -42,6 +42,8 @@ minecraft {
 }
 
 dependencies {
+
+//    compile files("D:\\GitHub\\forge-1.8.9-11.15.1.2318-1.8.9-mdk\\libs\\dancore.jar");
     // you may put jars on which you depend on in ./libs
     // or you may define them like so..
     //compile "some.group:artifact:version:classifier"
@@ -83,4 +85,14 @@ processResources
     from(sourceSets.main.resources.srcDirs) {
         exclude 'mcmod.info'
     }
+}
+
+jar {
+    manifest.attributes(
+            "ModuleName" : "Water Tools Mod",
+            "Author" : "5si",
+            "Description" : "",
+            "Image" : "",
+            "Version" : "1.03"
+    )
 }

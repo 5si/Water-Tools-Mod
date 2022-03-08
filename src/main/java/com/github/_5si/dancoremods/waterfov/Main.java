@@ -162,6 +162,7 @@ public class Main extends AbstractModule {
 
     @SubscribeEvent
     public void render(BatchedLineRenderingEvent e) {
+        if (!this.isEnabled().getValue() || !this.waterHelper.getValue()) return;
         List<Pair<Position, Position>> lines = new ArrayList<>();
         for (BlockPos pos : this.pos) {
             lines.addAll(this.makeOutline(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1, pos.getY() + 1, pos.getZ() + 1));

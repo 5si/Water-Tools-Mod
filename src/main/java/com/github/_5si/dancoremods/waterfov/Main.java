@@ -11,8 +11,8 @@ import dev.boredhuman.api.module.Module;
 import dev.boredhuman.api.util.MutableValue;
 import dev.boredhuman.util.Pair;
 import dev.boredhuman.util.Position;
+import io.netty.util.internal.ConcurrentSet;
 import net.minecraft.block.Block;
-import net.minecraft.block.BlockAir;
 import net.minecraft.block.BlockDispenser;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -30,6 +30,9 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 //@Mod(modid = "watermod")
 @Module(name = "Water", author = {"5si"}, description = "Cool settings for rendering water in minecraft!")
@@ -98,55 +101,59 @@ public class Main extends AbstractModule {
     }
 
     private long tick = 0;
-    Set<BlockPos> pos = new LinkedHashSet<>();
+    Set<BlockPos> positions = new ConcurrentSet<>();
+    int radius = 50;
+
+    ExecutorService executorService;
 
     @SubscribeEvent
     public void tick(TickEvent.ClientTickEvent e) {
-        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue() || e.phase != TickEvent.Phase.END) {
+        if (mc.thePlayer == null || mc.theWorld == null || !this.isEnabled().getValue() || !this.waterHelper.getValue()) {
+            if (!positions.isEmpty()) positions.clear();
             return;
         }
+        if (e.phase != TickEvent.Phase.END) return;
         if (++tick % 20 == 0) {
-            pos.clear();
-            BlockPos.MutableBlockPos mbp = new BlockPos.MutableBlockPos();
-            for (int x = (int) (mc.thePlayer.posX - 25); x <= mc.thePlayer.posX + 25; ++x)
-                for (int y = (int) (mc.thePlayer.posY - 25); y <= mc.thePlayer.posY + 25; ++y)
-                    for (int z = (int) (mc.thePlayer.posZ - 25); z <= mc.thePlayer.posZ + 25; ++z) {
-                        if (y < 1 || y > 255) continue;
-                        mbp.set(x, y, z);
-                        IBlockState bs = mc.theWorld.getBlockState(mbp);
-                        if (!(bs.getBlock() instanceof BlockDispenser)) {
-                            continue;
-                        }
-                        EnumFacing facing = bs.getValue(BlockDispenser.FACING);
-                        BlockPos faceb = mbp.offset(facing);
-                        IBlockState face = mc.theWorld.getBlockState(faceb);
-                        int blockid = Block.getIdFromBlock(face.getBlock());
-                        if (blockid == 8 || blockid == 9) {
-                            continue;
-                        }
-                        BlockPos top = mbp.offset(EnumFacing.UP);
-                        IBlockState abovedispenser = mc.theWorld.getBlockState(top);
-                        BlockPos below = mbp.offset(EnumFacing.DOWN);
-                        IBlockState belowdispenser = mc.theWorld.getBlockState(below);
-                        if (abovedispenser instanceof BlockDispenser) continue;
-                        if (belowdispenser.getBlock() instanceof BlockDispenser) {
-                            BlockPos target = below.offset(facing);
-                            IBlockState targetb = mc.theWorld.getBlockState(target);
-                            BlockPos abovefront = target.offset(EnumFacing.UP);
-                            IBlockState abovewater = mc.theWorld.getBlockState(abovefront);
-                            int id = Block.getIdFromBlock(targetb.getBlock());
-                            if (id == 8 || id == 9) {
+            positions.clear();
+            executorService = Executors.newFixedThreadPool(4);
+            int startY = Math.max((int) (mc.thePlayer.posY - radius), 0);
+            if (startY > 255) return;
+            int height = (int) Math.min(mc.thePlayer.posY + radius, 255);
+            if (height < 0) return;
+            for (int loopX = (int) mc.thePlayer.posX - radius; loopX <= mc.thePlayer.posX + radius; ++loopX) {
+                final int x = loopX;
+                for (int loopZ = (int) mc.thePlayer.posZ - radius; loopZ <= mc.thePlayer.posZ + radius; ++loopZ) {
+                    final int z = loopZ;
+                    executorService.submit(() -> {
+                        BlockPos.MutableBlockPos mbp = new BlockPos.MutableBlockPos();
+                        Map<EnumFacing, BlockPos> posToAdd = new HashMap<>();
+                        for (int y = startY; y <= height; ++y) {
+                            mbp.set(x, y, z);
+                            IBlockState blockState = mc.theWorld.getBlockState(mbp);
+                            if (!(blockState.getBlock() instanceof BlockDispenser)) {
                                 continue;
                             }
-                            if (abovewater.getBlock() instanceof BlockAir) {
-                                pos.add(abovefront);
-                            } else {
-                                pos.add(target);
+                            EnumFacing facing = blockState.getValue(BlockDispenser.FACING);
+                            BlockPos faceblock = mbp.offset(facing);
+                            int id = Block.getIdFromBlock(mc.theWorld.getBlockState(faceblock).getBlock());
+                            if (id == 8 || id == 9) continue;
+                            if (facing == EnumFacing.DOWN || facing == EnumFacing.UP) {
+                                this.positions.add(faceblock);
+                                continue;
                             }
-                        } else {
-                            pos.add(faceb);
+                            posToAdd.put(facing, faceblock);
                         }
-                    }
+                        this.positions.addAll(posToAdd.values());
+                    });
+                }
+            }
+            executorService.shutdown();
+            try {
+                executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+            } catch (Throwable err) {
+                err.printStackTrace();
+                executorService.shutdownNow();
+            }
         }
     }
 
@@ -164,7 +171,7 @@ public class Main extends AbstractModule {
     public void render(BatchedLineRenderingEvent e) {
         if (!this.isEnabled().getValue() || !this.waterHelper.getValue()) return;
         List<Pair<Position, Position>> lines = new ArrayList<>();
-        for (BlockPos pos : this.pos) {
+        for (BlockPos pos : this.positions) {
             lines.addAll(this.makeOutline(pos.getX(), pos.getY(), pos.getZ(), pos.getX() + 1, pos.getY() + 1, pos.getZ() + 1));
         }
         e.addLineLineWidth(Pair.of(this.lineWidth.getValue(), this.renderHook), new BatchedLineRenderingEvent.Line(lines, this.waterHelperColor.getBGRA()));
